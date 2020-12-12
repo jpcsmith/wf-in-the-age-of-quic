@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Usage: extract-extended-features [options] INFILE OUTFILE
+
+Extract the set of 3000+ manual features for the "/sizes" and
+"/timestamps" in the HDF INFILE, and write them in npy format
+to OUTFILE.
+
+Options:
+    --batch-size n
+        Distribute the job in batches of size n [default: 5000].
+
+    --n-jobs n
+        Split the task into n jobs. Default is to use all cores.
+"""
+import logging
+import functools
+import multiprocessing
+from typing import Optional, IO
+
+import h5py
+import doceasy
+import numpy as np
+
+from lab.third_party import li2018measuring
+
+_LOGGER = logging.getLogger("extract-extended-features")
+_FEATURES: Optional[multiprocessing.Array] = None
+
+
+def _run_extraction(idx, infile: str, n_features: int):
+    # Use copies so that the original memory of the full file may be freed
+    with h5py.File(infile, mode="r") as h5file:
+        sizes = np.asarray(h5file["sizes"][idx], dtype=np.object)
+        times = np.asarray(h5file["timestamps"][idx], dtype=np.object)
+
+    assert _FEATURES is not None
+    view = np.frombuffer(_FEATURES).reshape((-1, n_features))
+    for i, time_row, size_row in zip(idx, times, sizes):
+        view[i, :] = li2018measuring.extract_features(
+            timestamps=time_row, sizes=size_row)
+
+
+def extract_extended_features(
+    infile: str, outfile: IO[bytes], batch_size: int, n_jobs: Optional[int],
+):
+    """Extract the 3000+ set of features."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    # Determine the output dimensions
+    with h5py.File(infile, mode="r") as h5file:
+        n_samples = h5file["labels"].shape[0]
+        n_features = len(li2018measuring.extract_features(
+            h5file["timestamps"][0], h5file["sizes"][0]))
+
+    # Use our own splits as imap chunking would yield them one at a time
+    n_batches = max(n_samples // batch_size, 1)
+    splits = np.array_split(np.arange(n_samples), n_batches)
+
+    # Create an array from the results. No two processes access the same memory,
+    # so we can avoid the lock
+    global _FEATURES  # pylint: disable=global-statement
+    _FEATURES = multiprocessing.Array("d", n_samples * n_features, lock=False)
+    _LOGGER.info("Result shape will be (%d, %d)", n_samples, n_features)
+
+    _LOGGER.info("Extracting features in %d batches...", n_batches)
+    with multiprocessing.Pool(n_jobs) as pool:
+        # Pass the filenames and indices to the background process
+        for i, _ in enumerate(pool.imap(
+            functools.partial(
+                _run_extraction, infile=infile, n_features=n_features),
+            splits, chunksize=1
+        )):
+            if (i + 1) % 20 != 0:
+                continue
+
+            progress = ((i+1) * 100 / n_batches)
+            _LOGGER.info("Extraction is %.2f%% complete.", progress)
+
+    view = np.frombuffer(_FEATURES).reshape((-1, n_features))
+    np.save(outfile, view, allow_pickle=False)
+
+
+if __name__ == "__main__":
+    extract_extended_features(**doceasy.doceasy(__doc__, {
+        "INFILE": str,
+        "OUTFILE": doceasy.File(mode="wb"),
+        "--batch-size": doceasy.Use(int),
+        "--n-jobs": doceasy.Or(None, doceasy.Use(int)),
+    }))

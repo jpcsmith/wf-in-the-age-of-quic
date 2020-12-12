@@ -1,0 +1,6 @@
+top-lists:
+    alexa-1m: http://s3.amazonaws.com/alexa-static/top-1m.csv.zip
+    umbrella-1m: http://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip
+    majestic-1m: http://downloads.majestic.com/majestic_million.csv
+tld-url: https://data.iana.org/TLD/tlds-alpha-by-domain.txt
+n_profile_parts: 40

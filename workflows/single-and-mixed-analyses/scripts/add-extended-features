@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Usage: add-extended-features FEATURES RANKS DATASET
+
+Add the k-FP extended features to the HDF DATASET in the order of the
+ranks found in the CSV RANKS.
+"""
+import h5py
+import doceasy
+import numpy as np
+import pandas as pd
+
+
+def _main(features: str, ranks: str, dataset: str):
+    feature_array = np.load(features)
+    ordered_idx = pd.read_csv(ranks)["index"].values
+
+    with h5py.File(dataset, mode="a") as h5file:
+        dset = h5file.require_dataset(
+            "kfp-ext", shape=feature_array.shape, dtype=float, exact=True)
+        # Fill NANs with zero. Filling them with mean values cannot be done
+        # here, as that would leak test data into training datasets for every
+        # split. Looking at the code that created the nans they seem to be all
+        # for situations which should never themselves be zero, thus allowing
+        # zero to be a valid fill value.
+        dset[:] = np.nan_to_num(feature_array[:, ordered_idx], copy=False)
+
+
+if __name__ == "__main__":
+    _main(**doceasy.doceasy(__doc__, {
+        "FEATURES": str, "RANKS": str, "DATASET": str,
+    }))

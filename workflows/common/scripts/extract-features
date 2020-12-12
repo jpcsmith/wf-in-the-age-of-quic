@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Usage: extract-features [options] INFILE OUTFILE
+
+Extract features for each classifier from the datasets "sizes" and
+"timestamps" in the HDF INFILE, and write them to the HDF OUTFILE,
+identified by the classifier's name.  Labels are also written to
+OUTFILE as "labels".
+"""
+import logging
+
+import h5py
+import doceasy
+import numpy as np
+
+import classifiers
+
+
+_LOGGER = logging.getLogger("extract-features")
+CLASSIFIERS = ["dfnet", "p1fp", "kfp", "varcnn-time", "varcnn-sizes"]
+
+
+def _write_features(h5group: h5py.Group, classifier_list, sizes, timestamps):
+    for classifier in classifier_list:
+        factory = classifiers.get_classifier_factory(classifier)
+
+        _LOGGER.info("Extracting features for classifier %r...", classifier)
+        features = factory.extract_features(sizes=sizes, timestamps=timestamps)
+
+        _LOGGER.info("Writing features to the dataset...")
+        h5group.create_dataset(classifier, data=features, compression="gzip")
+
+
+def extract_features(infile: str, outfile: str):
+    """Perform the extraction."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    with h5py.File(infile, mode="r") as h5in:
+        _LOGGER.info("Loading dataset...")
+        sizes = np.asarray(h5in["sizes"], dtype=np.object)
+        times = np.asarray(h5in["timestamps"], dtype=np.object)
+
+        with h5py.File(outfile, mode="w") as h5out:
+            _LOGGER.info("Copying labels...")
+            h5out.copy(h5in["labels"], "labels")
+
+            _write_features(h5out, CLASSIFIERS, sizes=sizes, timestamps=times)
+
+
+if __name__ == "__main__":
+    extract_features(**doceasy.doceasy(__doc__, {
+        "INFILE": str,
+        "OUTFILE": str,
+    }))

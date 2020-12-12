@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Usage: balance-urls [options] TLD_LIST [URL_LIST] [OUTFILE]
+
+Remove URLs from URL_LIST that are disproportionately represented.
+
+URLs such as those belonging to blogspot.com may be heavily represented
+in the dataset.  Such domains are sampled to select a representative
+set, and the list containing these sampled URLs and all other URLs is
+then returned sets.
+
+To acheive this, we remove group domains by their highest domain
+levels, up-to and including their first non-TLD-domain part.  We do not
+use the Public Suffix List as this considers domains such as
+blogspot.com to be a public suffix, however we want to remove such
+domains.
+
+The URLs are read one per line from URL_LIST.  The results are
+optionally shuffled before being written to OUTFILE.  TLD_LIST specifies
+the top-level domains, one per line.
+
+Options:
+    --threshold thres   Downsample domains with more than thres entries
+                        with the sample private domain [default: 50].
+    --shuffle           Shuffle the list before printing.
+    --seed value        Seed the pseudorandom number generator with value.
+    --help              Display this message and exit.
+"""
+import logging
+import pathlib
+from urllib import parse
+
+import doceasy
+from doceasy import PositiveInt, Or
+import pandas as pd
+import numpy as np
+
+_LOGGER = logging.getLogger(pathlib.Path(__file__).name)
+
+
+def _get_private_part(url: str, tlds) -> str:
+    netloc_parts = parse.urlparse(url).netloc.split('.')
+
+    # Find the index of the first non-TLD suffix
+    i = None
+    for i, part in enumerate(reversed(netloc_parts)):
+        if part not in tlds:
+            break
+    assert i is not None
+    return '.'.join(netloc_parts[-(i+1):])
+
+
+def balance_urls(series: pd.Series, tlds: set, threshold: int, random_state):
+    """Downsample URLs that have more than threshold entries with the
+    sample private portion.
+    """
+    def _sample_above_threshold(group):
+        if len(group) > threshold:
+            _LOGGER.info("Downsampling %s with %d entries.",
+                         group['group'].unique()[0], len(group))
+            return group.sample(n=threshold, random_state=random_state)
+        return group
+
+    private_parts = series.apply(_get_private_part, tlds=tlds)
+    return (pd.DataFrame({'url': series, 'group': private_parts})
+            .groupby('group')
+            .apply(_sample_above_threshold)
+            .loc[:, 'url'])
+
+
+# pylint: disable=too-many-arguments
+def main(url_list, tld_list, outfile, threshold: int, shuffle: bool, seed):
+    """Run the entry logic for the script."""
+    logging.basicConfig(
+        format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO)
+
+    rand = np.random.RandomState(seed)
+    tlds = set(pd.read_csv(tld_list, squeeze=True, comment='#', header=None)
+               .str.lower()
+               .values)
+    urls = pd.read_csv(url_list, header=None, squeeze=True)
+    urls = balance_urls(urls, tlds, threshold, rand)
+
+    if shuffle:
+        urls = urls.sample(frac=1.0, random_state=rand)
+    urls.to_csv(outfile, header=False, index=False)
+
+
+if __name__ == '__main__':
+    main(**doceasy.doceasy(__doc__, doceasy.Schema({
+        'URL_LIST': doceasy.File(mode='r', default='-'),
+        'TLD_LIST': doceasy.File(mode='r'),
+        'OUTFILE': doceasy.File(mode='w', default='-'),
+        '--threshold': PositiveInt,
+        '--shuffle': bool,
+        '--seed': Or(None, PositiveInt)
+    }, ignore_extra_keys=True)))

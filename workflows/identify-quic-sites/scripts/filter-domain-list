@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Usage: filter-domain-list [options] [DOMAIN_FILE] [OUTFILE]
+
+Filter invalid, similar, or duplicate entries from the domain list.
+DOMAIN_FILE is a list of domain names, one per line.
+
+Options:
+    --tlds=file
+        Read the TLDs from the specified file where each line contains
+        a single TLD [default: data/tlds-alpha-by-domain.txt].
+    --help, -h  Display this message and exit.
+"""
+import logging
+import pathlib
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+import doceasy
+
+
+_LOGGER = logging.getLogger(pathlib.Path(__file__).name)
+
+
+def filter_by_tld(domains: pd.Series, tlds: Sequence) -> pd.Series:
+    """Remove domains whose TLD are not in the list of top-level
+    domains.
+
+    This is necessary as some of the top-lists have DNS queries, that
+    are 'polluted' by reverse DNS lookups.
+
+    Requires that the domains and tlds should be in the same case.
+    """
+    tlds = np.asarray(tlds)
+
+    domain_tld = domains.str.rsplit('.', n=1, expand=True)[1]
+    valid_domains = domain_tld.isin(tlds)
+    assert sum(valid_domains) > 1
+
+    _LOGGER.info("Removed %d domains with invalid TLDs.", sum(~valid_domains))
+    return domains[valid_domains]
+
+
+def main(domain_file, outfile, tlds):
+    """Script entrypoint."""
+    logging.basicConfig(
+        format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO)
+
+    tlds = pd.read_csv(tlds, squeeze=True, comment='#', header=None).str.lower()
+    (pd.read_csv(domain_file, header=None, squeeze=True).str.lower()
+     .pipe(filter_by_tld, tlds=tlds)
+     .to_csv(outfile, header=False, index=False))
+
+
+if __name__ == '__main__':
+    main(**doceasy.doceasy(__doc__, doceasy.Schema({
+        'DOMAIN_FILE': doceasy.File(mode='r', default='-'),
+        'OUTFILE': doceasy.File(mode='w', default='-'),
+        '--tlds': doceasy.File(mode='r'),
+    }, ignore_extra_keys=True)))

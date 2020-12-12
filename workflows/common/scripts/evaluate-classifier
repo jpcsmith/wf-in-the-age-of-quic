@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Usage: evaluate-classifier [options] CLASSIFIER DATASET INDICES OUTFILE
+
+Evaluate the classifier identified by CLASSIFIER on DATASET, splitting
+using INDICES.  CLASSIFIER can be any of the following:
+
+    dfnet, varcnn-sizes, varcnn-time, p1fp, kfp
+
+DATASET is the path to an HDF5 file containing pre-extracted features.
+INDICES is a json object with train, val, test, and train-val indices.
+
+Options:
+    --classifier-args str
+        A mapping of key1=value1 of arguments that can be passed to the
+        classifer experiment.
+"""
+import json
+import time
+import pathlib
+import logging
+import contextlib
+import dataclasses
+from typing import ClassVar
+
+import h5py
+import doceasy
+import tensorflow
+import numpy as np
+from numpy.random import RandomState
+
+from classifiers import ClassifierFactory, get_classifier_factory
+
+
+@dataclasses.dataclass
+class Experiment:
+    """An experiment evaluating the performance of with differing
+    datasets.
+    """
+    # The path to the HDF dataset to load the traces from
+    dataset: str
+
+    # Path to a file with the indices for training, testing, and validation
+    indices: str
+
+    # The classifier to be used in the experiment
+    classifier_factory: ClassifierFactory
+
+    # Other
+    seed: int = 79
+    logger: ClassVar = logging.getLogger("Experiment")
+
+    def load_dataset(self):
+        """Load the monitored and unmonitored features and classes labels.
+        """
+        self.logger.info("Loading the dataset from %r...", self.dataset)
+        with h5py.File(self.dataset, mode="r") as h5file:
+            y_true = np.asarray(h5file["labels"]["class"])
+            features = self.classifier_factory.load_features(h5file)
+            return features, y_true
+
+    def load_splits(self):
+        """Load the indices to split the dataset."""
+        indices = json.loads(pathlib.Path(self.indices).read_text())
+
+        with_val = self.classifier_factory.requires_validation_set
+
+        # Indices train, val, test are used if the classifier requires a
+        # validation set. The combined indices train-val is used if there is no
+        # need for a validation set
+        train_idx = np.asarray(indices["train" if with_val else "train-val"])
+        val_idx = np.asarray(indices["val"]) if with_val else None
+        test_idx = np.asarray(indices["test"])
+
+        n_val = 0 if val_idx is None else len(val_idx)
+        self.logger.info("Using %d training samples, %d validation samples and "
+                         "%d test samples.", len(train_idx), n_val,
+                         len(test_idx))
+        return train_idx, val_idx, test_idx
+
+    def run(self) -> tuple:
+        """Run the experiment and yield the prediction probablities for
+        each class, the classes, and the true class label.
+        """
+        self.logger.info("Running %s.", self)
+        start = time.perf_counter()
+
+        random_state = RandomState(self.seed)
+        X, y = self.load_dataset()
+        train_idx, val_idx, test_idx = self.load_splits()
+
+        self.logger.info("Fitting the classifier...")
+
+        classifier = self.classifier_factory.create(
+            random_state=random_state)
+
+        if val_idx is None:
+            classifier.fit(X[train_idx], y[train_idx])
+        else:
+            classifier.fit(X[train_idx], y[train_idx],
+                           validation_data=(X[val_idx], y[val_idx]))
+
+        self.logger.info("Performing predictions...")
+        probabilities = classifier.predict_proba(X[test_idx])
+
+        self.logger.info(
+            "Experiment complete in %.2fs.", (time.perf_counter() - start))
+
+        return (probabilities, y[test_idx], classifier.classes_)
+
+
+def _maybe_distribute():
+    """Return a context manager for distributing the workload across
+    multiple GPUs if present. Return a no-op context otherwise.
+    """
+    n_gpus = len(tensorflow.config.experimental.list_physical_devices('GPU'))
+
+    return (tensorflow.distribute.MirroredStrategy().scope() if n_gpus > 1
+            else contextlib.nullcontext())
+
+
+def run_experiment(
+    classifier: str, dataset: str, indices: str, outfile, classifier_args: dict
+):
+    """Run the experiment."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    classifier_args = classifier_args or dict()
+
+    with _maybe_distribute():
+        (probabilities, y_true, classes) = Experiment(
+            dataset, indices,
+            get_classifier_factory(classifier, **classifier_args)
+        ).run()
+
+    outfile.writerow(["y_true"] + list(classes))
+    outfile.writerows(
+        np.hstack((np.reshape(y_true, (-1, 1)), probabilities)))
+
+
+if __name__ == "__main__":
+    run_experiment(**doceasy.doceasy(__doc__, {
+        "CLASSIFIER": doceasy.Or(
+            "dfnet", "varcnn-time", "varcnn-sizes", "p1fp", "kfp"
+        ),
+        "DATASET": str,
+        "INDICES": str,
+        "OUTFILE": doceasy.CsvFile(mode="w"),
+        "--classifier-args": doceasy.Or(None, doceasy.And(doceasy.Mapping(), {
+            doceasy.Optional("epochs"): doceasy.Use(int),
+            doceasy.Optional("feature_set"): str,
+            doceasy.Optional("n_features_hint"): doceasy.Use(int),
+            doceasy.Optional("n_jobs"): doceasy.Use(int),
+        })),
+    }))

@@ -1,0 +1,15 @@
+---
+# The traces to use as the basis of the experiment
+traces:
+    monitored: "../removing-control-packets/results/filtered/monitored-traces.hdf"
+    unmonitored: "../removing-control-packets/results/filtered/unmonitored-traces.hdf"
+
+# Tags of the classifiers to evaluate the experiment on
+classifiers: ["dfnet", "varcnn", "p1fp", "kfp"]
+classifier_time: {"dfnet": 70, "kfp": 10}
+
+# Total number of repetitions to run for each classifier
+n_repetitions: 10
+
+# Levels of QUIC URL deployment to evaluate
+quic_deployment_levels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

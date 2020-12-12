@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Usage: trace-to-hdf [options] HDF_FILE INFILES...
+
+Convert the traces to HDF5 format for efficient reading.  INFILE is one
+or more filenames to read the traces from.  The traces are written to
+"/sizes" and "/timestamps" in HDF_FILE.  The labels and other metadata
+are written to "/labels".
+
+Options:
+    --chunk-size n  Read the files in chunks of size n [default: 5000].
+    --queue-size n  Use a queue of size n to receive chunks from the
+                    background processes. A smaller queue size requires
+                    less memory, but the writer may block waiting for
+                    chunks [default: 3].
+"""
+import time
+import json
+import pathlib
+import logging
+from typing import List, Sequence
+from multiprocessing import Queue, Process
+
+import h5py
+import numpy as np
+import doceasy
+
+_LOGGER = logging.getLogger(pathlib.Path(__file__).name)
+SIZE_DTYPE = np.dtype("i4")
+LABEL_DTYPE = np.dtype([("url", "S100"), ("protocol", "S10"), ("region", "S7")])
+
+
+def _encode_trace(trace_data, buffer: np.ndarray) -> dict:
+    """Encode a trace as a numpy array. Uses the provided buffer for the
+    construction of the array.  The final array is independent of the
+    buffer.
+    """
+    trace_len = len(trace_data["trace"])
+
+    if len(buffer) < trace_len:
+        buffer.resize((trace_len, 3), refcheck=False)
+    buffer[:trace_len, :] = trace_data["trace"]
+
+    trace_data["timestamps"] = buffer[:trace_len, 0].copy()
+    trace_data["sizes"] = (
+        buffer[:trace_len, 1] * buffer[:trace_len, 2]).astype(SIZE_DTYPE)
+    del trace_data["trace"]
+    return trace_data
+
+
+def _enqueue_chunks(filename: str, queue: Queue, chunk_size: int):
+    """Read traces in chunks of size chunk_size from filename and
+    push them onto the queue.
+    """
+    buffer = np.array([], dtype=float)
+    results = []
+    with open(filename, mode="r") as trace_file:
+        for line in trace_file:
+            results.append(_encode_trace(json.loads(line), buffer))
+            if len(results) == chunk_size:
+                queue.put(results, block=True)
+                results = []
+    # Return the last chunk if it was not already returned
+    if len(results) > 0:
+        queue.put(results, block=True)
+    queue.put([], block=True)
+
+
+def _read_in_chunks(infiles: List[str], chunk_size: int, queue_size: int = 2):
+    assert chunk_size > 0
+
+    queue: Queue = Queue(queue_size)
+    processes = []
+
+    for filename in infiles:
+        process = Process(
+            name=f"Process({filename}, {chunk_size})", target=_enqueue_chunks,
+            kwargs={"queue": queue, "filename": filename,
+                    "chunk_size": chunk_size})
+        process.start()
+        processes.append(process)
+
+    n_processes_running = len(processes)
+    while n_processes_running > 0:
+        chunk = queue.get(block=True)
+
+        # Processes put an empty list into the queue when they are done
+        if len(chunk) == 0:
+            n_processes_running -= 1
+            _LOGGER.info("A subprocess completed, %d remaining.",
+                         n_processes_running)
+        else:
+            yield chunk
+
+    for process in processes:
+        process.join()
+
+
+def _write_labels(trace_data: Sequence, hdf_file: h5py.File):
+    """Append the labels found in trace_data to the HDF file."""
+    labels = np.array([
+        (data["url"], data["protocol"], data["region"]) for data in trace_data
+    ], dtype=LABEL_DTYPE)
+
+    if "/labels" not in hdf_file.keys():
+        hdf_file.create_dataset(
+            "/labels", data=labels, maxshape=(None, ),
+            compression="gzip")
+    else:
+        new_length = hdf_file["/labels"].len() + len(labels)
+        hdf_file["/labels"].resize(new_length, axis=0)
+        hdf_file["/labels"][-len(labels):] = labels
+
+
+def _write_traces(trace_data: Sequence, hdf_file: h5py.File):
+    """Append the traces found in trace_data to the HDF file."""
+    for key, raw_type in zip(("sizes", "timestamps"), (SIZE_DTYPE, float)):
+        data = list(entry[key] for entry in trace_data)
+
+        if key not in hdf_file.keys():
+            dtype = h5py.vlen_dtype(raw_type)
+            hdf_file.create_dataset(
+                key, data=data, dtype=dtype, maxshape=(None,),
+                compression="gzip")
+        else:
+            dataset = hdf_file[key]
+            new_length = dataset.len() + len(data)
+            dataset.resize(new_length, axis=0)
+            dataset[-len(data):] = data
+
+
+def trace_to_hdf(
+    infiles: List[str], hdf_file: str, chunk_size: int, queue_size: int
+):
+    """Convert the trace from infile to HDF format, and write it to
+    hdf_file.
+    """
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+    start = time.perf_counter()
+
+    with h5py.File(hdf_file, mode="w") as outfile:
+        _LOGGER.info("Reading %d files in chunks of size %d and queue size of "
+                     "%d. Waiting for the first chunk.",
+                     len(infiles), chunk_size, queue_size)
+        for i, trace_data in enumerate(
+            _read_in_chunks(infiles, chunk_size, queue_size=queue_size)
+        ):
+            _LOGGER.info("Writing chunk %d to %s.", i, hdf_file)
+            _write_labels(trace_data, outfile)
+            _write_traces(trace_data, outfile)
+            _LOGGER.info("Waiting for a block of trace data...")
+
+    logging.info("Conversion complete in %.2fs", (time.perf_counter() - start))
+
+
+if __name__ == "__main__":
+    trace_to_hdf(**doceasy.doceasy(__doc__, {
+        "INFILES": [str],
+        "HDF_FILE": str,
+        "--chunk-size": doceasy.Use(int),
+        "--queue-size": doceasy.Use(int),
+    }))

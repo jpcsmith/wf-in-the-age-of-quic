@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Usage: evaluate-distinguisher [options] INFILE OUTFILE
+
+Evaluate the distinguiser train a QUIC and TCP samples from the HDF
+INFILE, and written to the CSV outfile.
+
+Options:
+    --importances csv
+        Write the feature importances to csv, along with the reptition
+        id.
+
+    --train-size n
+        Train on n URLs, test on the remaining URLs [default: 100].
+
+    --n-jobs n
+        Use n many parallel jobs.  Must be a positive integer or -1 to
+        use as many jobs as there are cores [default: -1].
+"""
+import logging
+from typing import Iterator, ClassVar
+from dataclasses import dataclass
+from collections import namedtuple
+
+import h5py
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.ensemble import RandomForestClassifier
+import doceasy
+
+
+Result = namedtuple("Result", ("y_true", "predictions", "importances"))
+
+
+# pylint: disable=too-many-instance-attributes
+@dataclass
+class EvaluateDistinguisherExperiment:
+    """Evaluate the ability of the random-forest classifier to
+    distinguish between QUIC and TCP samples.
+    """
+    # The dataset to use in the experiment
+    dataset: str
+
+    # The number of QUIC features to use
+    n_quic_features: int = 300
+
+    # Parameters for splitting the URLs into train and test sets
+    n_splits: int = 10
+    # The number of URLs in the training set. All other URLs are in the test set
+    train_size: int = 100
+
+    # The number of estimators to use in training, more is always better, but
+    # results in a longer runtime
+    n_estimators: int = 150
+
+    # Default seed for the RNG
+    seed: int = 10617
+
+    # The number of jobs, -1 means use all
+    n_jobs: int = -1
+
+    logger: ClassVar = logging.getLogger("EvaluateDistinguisher")
+
+    def load_dataset(self) -> tuple:
+        """Return a tuple of the labels dataframe and features."""
+        with h5py.File(self.dataset, mode="r") as h5in:
+            self.logger.info("Loading the labels...")
+            labels = pd.DataFrame.from_records(np.asarray(h5in["labels"]))
+            labels[["protocol", "region"]] = \
+                labels[["protocol", "region"]].transform(
+                    lambda col: col.str.decode("ascii"))
+
+            self.logger.info("Loading the features...")
+            features = np.hstack(
+                (h5in["kfp"], h5in["kfp-ext"][:, :self.n_quic_features]))
+            features = np.nan_to_num(features, copy=False)
+
+        return features, labels
+
+    def split_dataset(self, labels, random_state) -> Iterator[tuple]:
+        """Split the dataset, and yield train, test splits.
+        """
+        # Merge the group and class columns so that we have all distinct
+        # URLs identified in a single column.
+        labels["group"] = labels["group"].where(
+            labels["group"] != 0, labels["class"])
+        labels = (labels.groupby(["group", "protocol"], group_keys=False)
+                  .apply(pd.DataFrame.sample, n=1, random_state=random_state))
+        self.logger.info("Using %d samples after selecting 1 sample per "
+                         "URL-protocol pair.", len(labels))
+
+        # Store the original indices so we can remap the split indices to the
+        # full dataset
+        idx_map = labels.index.values
+
+        for train_idx, test_idx in GroupShuffleSplit(
+            n_splits=self.n_splits, train_size=self.train_size,
+            random_state=random_state
+        ).split(np.zeros(len(labels)), groups=labels["group"].values):
+            yield idx_map[train_idx], idx_map[test_idx]
+
+    def run(self) -> Iterator[Result]:
+        """Run the experiment."""
+        self.logger.info("Running the experiment %s", self)
+
+        X, labels = self.load_dataset()
+        # Binary classification where 1 is QUIC and 0 is TCP
+        y = (labels["protocol"] != "tcp").values.astype(int)
+
+        random_state = np.random.RandomState(self.seed)
+
+        model = RandomForestClassifier(
+            self.n_estimators, oob_score=True,
+            random_state=random_state, n_jobs=self.n_jobs)
+
+        for i, (train_idx, test_idx) in enumerate(self.split_dataset(
+            labels, random_state
+        )):
+            self.logger.info("Starting repetition %d/%d", (i+1), self.n_splits)
+            self.logger.info("Fitting classifier...")
+            model.fit(X[train_idx], y[train_idx])
+
+            self.logger.info("Predicting protocols...")
+            predictions = model.predict_proba(X[test_idx])[:, 1]
+
+            yield Result(y_true=y[test_idx], predictions=predictions,
+                         importances=model.feature_importances_)
+
+        self.logger.info("Experiment complete.")
+
+
+def main(infile, outfile, importances, **config):
+    """Entrypoint to run IO for the script."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    experiment = EvaluateDistinguisherExperiment(infile, **config)
+
+    outfile.writerow(["repetition", "y_true", "predictions"])
+    importances.writerow(
+        ["repetition"] + [f"kfp-{i:03d}" for i in range(165)]
+        + [f"kfp-ext-{i:03d}" for i in range(experiment.n_quic_features)])
+    for i, result in enumerate(experiment.run()):
+        n_samples = len(result.y_true)
+
+        outfile.writerows(np.hstack((
+            np.full((n_samples, 1), i), result.y_true.reshape((-1, 1)),
+            result.predictions.reshape((-1, 1))
+        )))
+
+        importances.writerow(np.concatenate(([i], result.importances)))
+
+
+if __name__ == '__main__':
+    main(**doceasy.doceasy(__doc__, {
+        "INFILE": str,
+        "OUTFILE": doceasy.CsvFile(mode="w", default="-"),
+        "--importances": doceasy.CsvFile(mode="w"),
+        "--n-jobs": doceasy.Use(int),
+        "--train-size": doceasy.Use(int),
+    }))

@@ -1,0 +1,19 @@
+---
+mon_traces: ../fetch-any-quic/results/traces/monitored-traces.hdf
+unmon_traces: ../fetch-any-quic/results/traces/unmonitored-traces.hdf
+
+# Tags of the classifiers to evaluate the experiment on
+classifiers: ["dfnet", "varcnn-time", "varcnn-sizes", "p1fp", "kfp"]
+# The number of GPUs used by each classifier
+n_gpus: {dfnet: 2, varcnn-time: 2, varcnn-sizes: 2, p1fp: 1, kfp: 0}
+# The number of threads used by each classifier
+n_threads: {dfnet: 2, varcnn-time: 2, varcnn-sizes: 2, p1fp: 2, kfp: 4}
+
+# Minimum packet size thresholds to evaluate
+thresholds: [1, 130, 175]
+
+# The number of repetitions for which to evaluate each threshold
+n_repetitions: 10
+
+# Chosen filter size based on the above experiment
+min_packet_size: 175

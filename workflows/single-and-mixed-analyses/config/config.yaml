@@ -1,0 +1,13 @@
+---
+classifiers: ["kfp", "dfnet", "p1fp", "varcnn-sizes", "varcnn-time"]
+
+open_world_dataset: "../generalisability-analysis/results/open-world-dataset.hdf"
+
+# Number of repetitions for the protocol-performance analysis
+n_repetitions: 20
+
+# Steps at which to evaluate the performance of the QUIC features
+quic_feature_steps: [20, 50, 90, 140, 200, 270, 350, 440, 540, 650]
+
+# The number of selected QUIC features
+n_quic_features: 300

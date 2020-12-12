@@ -1,0 +1,63 @@
+configfile: "config/config.yaml"
+
+localrules: default, create_splits, select_split
+
+rule default:
+    """Run all rules necessary to create the final plots and results."""
+    input:
+        "results/plots/feature-rank-comparison.pgf",
+        "results/plots/quic-feature-scores.pgf",
+        expand("results/dataset-performance/{classifier}/predictions-{protocol}-{i:02d}.csv",
+               classifier=config["classifiers"], i=range(config["n_repetitions"]),
+               protocol=("tcp", "quic", "mixed"))
+
+
+rule create_splits:
+    """Create the splits that will be used for evaluation."""
+    input:
+        config["open_world_dataset"]
+    output:
+        "{path}/split-{protocol}-{seed}.json"
+    log:
+        "{path}/split-{protocol}-{seed}.log"
+    params:
+        protocol="{protocol}",
+        seed="{seed}"
+    wildcard_constraints:
+        protocol="tcp|quic|mixed",
+        seed="\d+"
+    shell: """\
+        scripts/split-samples --protocol {params.protocol} --seed {params.seed} \
+            --n-repeats 3 {input} {output} 2> {log}
+        """
+
+
+rule select_split:
+    """Select a single split from split_traces and write it to a
+    temporary file."""
+    input:
+        "{path}/split-{protocol}-{seed}.json"
+    output:
+        temp("{path}/split-{protocol}-{i}-{seed}.json")
+    wildcard_constraints:
+        i="\d{2}"
+    params:
+        lineno=lambda w: int(w["i"]) + 1
+    shell: "cat {input} | sed -n '{params.lineno}p' > {output}"
+
+
+rule extracted_dataset:
+    """Create a dataset with features already extracted."""
+    input:
+        config["open_world_dataset"]
+    output:
+        "results/extracted-dataset.hdf"
+    shell: "scripts/extract-features {input} {output}"
+
+
+
+
+### Included modules ###
+include: "rules/feature-importance.smk"
+include: "rules/feature-selection.smk"
+include: "rules/dataset-performance.smk"

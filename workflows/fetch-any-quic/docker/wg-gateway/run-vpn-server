@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#? Usage: run-vpn-server
+#?
+#? Start the VPN server and remove it on interupt.
+#?
+#? Source: https://medium.com/@firizki/running-wireguard-on-docker-container-76355c43787c
+
+readonly INTERFACE=wg0
+
+
+function shutdown_wireguard {
+    local -r signal="$1"
+    echo "Shutting down wireguard due to signal: ${signal}" >&2
+    wg-quick down "${INTERFACE}"
+    exit 0
+}
+
+
+function shutdown_on {
+    for sig ; do
+        # shellcheck disable=2064
+        trap "shutdown_wireguard ${sig}" "${sig}"  
+    done
+}
+
+
+function start_wireguard {
+    if ! wg-quick up "${INTERFACE}"; then 
+        echo "Failed to start wireguard interface ${INTERFACE}." >&2
+        exit 1
+    fi
+    echo "Successfully brought up ${INTERFACE}." >&2
+
+    # Cleanup on interrupt
+    shutdown_on TERM INT QUIT 
+
+    # Prevent container close by sleeping
+    sleep infinity &
+
+    wait $!
+}
+
+
+start_wireguard "$@"

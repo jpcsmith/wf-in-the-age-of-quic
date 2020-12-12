@@ -1,0 +1,56 @@
+"""Fetch samples for the websites for a single QUIC version and TCP 
+and extract simple traffic traces from them.
+
+Requires that Wireguard is installed on the host machine despite the use
+of docker containers.
+
+This was copied from workflows/fetch-websites, and most of the tools and
+setup are located there.
+"""
+configfile: "config/config.yaml"
+
+
+### Rules ###
+
+rule default:
+    """Create monitored and unmonitored traces as well as their counts.
+    """
+    input:
+        "results/resource-protocol-counts/monitored-counts.json.gz",
+        "results/resource-protocol-counts/unmonitored-counts.json.gz",
+        "results/traces/monitored-traces.hdf",
+        "results/traces/unmonitored-traces.hdf"
+
+
+rule all_monitored_fetches:
+    """Collect monitored fetches for all VPN regions.
+    """
+    input:
+        expand("results/fetch/monitored-{region}-{batch_id:02d}.json.gz",
+               region=config["gateway_nodes"].keys(), 
+               batch_id=range(config["n_batches"]["monitored"])),
+
+
+rule all_unmonitored_fetches:
+    """Collect unmonitored fetches for all VPN regions.
+    """
+    input:
+        expand("results/fetch/unmonitored-{region}-{batch_id:02d}.json.gz",
+               region=config["gateway_nodes"].keys(), 
+               batch_id=range(config["n_batches"]["unmonitored"]))
+
+
+rule all_fetches:
+    """Collect monitored and unmonitored fetches for all VPN regions.
+    """
+    input:
+        rules.all_monitored_fetches.input,
+        rules.all_unmonitored_fetches.input
+
+
+### Include modules ###
+
+include: "../common/rules/compression.smk"
+include: "rules/create-traces.smk"
+include: "rules/fetch-and-aggregate.smk"
+include: "rules/resource-protocol-counts.smk"

@@ -1,0 +1,163 @@
+"""Experiment to check the impact of removing control packets from the
+traces.
+"""
+configfile: "config/config.yaml"
+
+# ----------------------
+# Settings and functions
+# ----------------------
+wildcard_constraints:
+    threshold="\d+",
+    classifier="|".join(config["classifiers"]),
+    rep="\d{2}"
+
+
+CPU_CLASSIFIERS = ["kfp"] if "kfp" in config["classifiers"] else []
+GPU_CLASSIFIERS = [c for c in config["classifiers"] if c not in CPU_CLASSIFIERS]
+
+# Set the GPU resource to one as tensorflow will by default use all available GPUs for
+# any given experiment.
+workflow.global_resources.setdefault("gpus", 1)
+
+
+# ------------------
+# Rules
+# ------------------
+localrules: select_traces, remove_small_packets, extract_filtered_features, split_traces
+
+rule default:
+    """Create all targets necessary for the analysis as well as the filtered dataset."""
+    input:
+        "results/filtered/monitored-traces.hdf",
+        "results/filtered/unmonitored-traces.hdf",
+        "results/plots/packet-size-ecdf.pgf",
+        "results/plots/score-vs-min-packet-size-prcurve.pgf"
+
+
+rule select_traces:
+    """Select the traces to be used for the experiment."""
+    input:
+        monitored=config["mon_traces"],
+        unmonitored=config["unmon_traces"]
+    output:
+        "results/trace-dataset.hdf"
+    log:
+        "results/logs/select-traces.log"
+    shell: """\
+        scripts/select-traces {input.monitored} {input.unmonitored} {output} \
+            2> >(tee {log} >&2)
+        """
+
+rule remove_small_packets:
+    """Remove packets below a specified threshold."""
+    input:
+        rules.select_traces.output
+    output:
+        temp("results/filtered-dataset-{threshold}.hdf")
+    log:
+        "results/filtered-dataset-{threshold}.log"
+    params:
+        threshold="{threshold}"
+    shell: "scripts/remove-small-packets {params.threshold} {input} {output} 2> {log}"
+
+
+rule extract_filtered_features:
+    """Extract the features for each classifier."""
+    input:
+        rules.remove_small_packets.output
+    output:
+        "results/features-{threshold}.hdf"
+    log:
+        "results/features-{threshold}.log"
+    params:
+        threshold="{threshold}"
+    threads: workflow.cores
+    shell: "scripts/extract-features {input} {output} 2> >(tee {log} >&2)"
+
+rule split_traces:
+    """Select the indicies of splits to be used in the experiments."""
+    input:
+        rules.extract_filtered_features.output
+    output:
+        "results/split-indices-{threshold}.json"
+    log:
+        "results/split-indices-{threshold}.log"
+    shell: "scripts/split-traces {input} {output} 2> {log}"
+
+
+rule single_classifier_result:
+    """The result of a classifier evaluated on a single split."""
+    input:
+        dataset=rules.extract_filtered_features.output,
+        splits=rules.split_traces.output
+    output:
+        "results/{classifier}/predictions-{threshold}-{rep}.csv"
+    log:
+        "results/{classifier}/predictions-{threshold}-{rep}.log"
+    resources:
+        gpus=lambda w: config["n_gpus"][w["classifier"]]
+    threads: lambda w: config["n_threads"][w["classifier"]]
+    params:
+        classifier="{classifier}",
+        lineno=lambda w: int(w["rep"]) + 1
+    shell: """\
+        scripts/evaluate-classifier --classifier-args n_jobs={threads} \
+            {params.classifier} {input.dataset} \
+            <(sed -n '{params.lineno}p' {input.splits}) {output} 2> {log}
+        """
+
+
+rule classifier_results__gpu:
+    """Generate results for all GPU classifiers."""
+    input:
+        expand("results/{classifier}/predictions-{threshold}-{rep:02d}.csv",
+               classifier=GPU_CLASSIFIERS, rep=range(config["n_repetitions"]),
+               threshold=config["thresholds"])
+
+
+rule classifier_results__cpu:
+    """Generate results for all CPU classifiers."""
+    input:
+        expand("results/{classifier}/predictions-{threshold}-{rep:02d}.csv",
+               classifier=CPU_CLASSIFIERS, rep=range(config["n_repetitions"]),
+               threshold=config["thresholds"])
+
+
+rule final_filtered_traces:
+    """Remove packets below the configured threshold from the monitored and
+    unmonitored traces."""
+    input:
+        monitored=config["mon_traces"],
+        unmonitored=config["unmon_traces"]
+    output:
+        monitored="results/filtered/monitored-traces.hdf",
+        unmonitored="results/filtered/unmonitored-traces.hdf"
+    params:
+        size=config["min_packet_size"]
+    shell: """\
+        scripts/remove-small-packets {params.size} {input.monitored} {output.monitored}
+        scripts/remove-small-packets {params.size} {input.unmonitored} {output.unmonitored}
+        """
+
+
+rule size_analysis:
+    """Create the plots of packet sizes and classification results."""
+    input:
+        rules.select_traces.output,
+        expand("results/{classifier}/predictions-{threshold}-{rep:02d}.csv",
+               classifier=config["classifiers"], rep=range(config["n_repetitions"]),
+               threshold=config["thresholds"])
+    output:
+        "results/plots/packet-size-ecdf.pgf"
+    shell: "jupyter nbconvert --execute --inplace notebooks/min-size-analysis.ipynb"
+
+
+rule control_packets_pr_curve:
+    """Create the precision recall curves of the classification results."""
+    input:
+        expand("results/{classifier}/predictions-{threshold}-{rep:02d}.csv",
+               classifier=config["classifiers"], rep=range(config["n_repetitions"]),
+               threshold=config["thresholds"])
+    output:
+        "results/plots/score-vs-min-packet-size-prcurve.pgf"
+    shell: "jupyter nbconvert --execute --inplace notebooks/min-size-analysis-curve.ipynb"

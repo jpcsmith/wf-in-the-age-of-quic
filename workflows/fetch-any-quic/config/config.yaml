@@ -1,0 +1,38 @@
+---
+urls_file: ../identify-quic-sites/results/profile-domains/urls-with-version.csv
+tlds_file: ../identify-quic-sites/results/all-domains/tlds-alpha-by-domain.txt
+
+n_monitored: 300
+
+# SSH ids of running machines for deploying the gateway
+gateway_nodes:
+    fra1: root@46.101.244.76
+    nyc3: root@104.131.1.155
+    blr1: root@142.93.212.172
+
+# The number of clients which will fetch through each Wireguard gateway
+n_clients_per_vpn: 5
+
+# The number of batches that the monitored traces are collected over
+n_batches:
+    monitored: 8
+    unmonitored: 50
+
+# The number of traces per protocol to collect on each VPN. These are
+# distributed across the clients of the VPN
+traces_per_vpn:
+    monitored: {quic: 40, tcp: 40}
+    unmonitored: {quic: 1, tcp: 1}
+
+# For the unmonitored URLs, failures should not result in the URL being
+# completedly abandonded
+keep_collecting_unmonitored: true
+
+# The size to which to truncate packets
+snaplen: 96
+
+# The subnet that the clients are located in as recorded in the PCAPs
+client_subnet: 172.16.0.0/12
+
+# The number of traces we need per protocol region
+n_traces_per_protocol_region: 30

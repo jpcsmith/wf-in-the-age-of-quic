@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Usage: run-experiment [options] CLASSIFIER DATASET INDICES OUTFILE
+
+Evaluate the performance of a classifier trained on TCP, but with
+QUIC traces present in the background.
+
+CLASSIFIER can be any of the following:
+    dfnet, varcnn-sizes, varcnn-time, p1fp, kfp
+
+DATASET is the path to an HDF5 file containing the monitored and
+unmonitored groups, each containing labels, sizes, and timestamps keys.
+
+Options:
+    --classifier-args str
+        A mapping of key1=value1 of arguments that can be passed to the
+        classifer experiment.
+"""
+import json
+import time
+import fcntl
+import errno
+import pathlib
+import logging
+import dataclasses
+import contextlib
+from typing import ClassVar
+
+import h5py
+import doceasy
+import numpy as np
+from numpy.random import RandomState
+import tensorflow
+
+from classifiers import ClassifierFactory, get_classifier_factory
+
+
+@dataclasses.dataclass
+class Experiment:
+    """An experiment evaluating the performance of classifiers trained
+    on TCP but tested with QUIC in the unmonitored set.
+    """
+    # The path to the HDF dataset to load the traces from
+    dataset: str
+
+    # Path to a file with the indices for training, testing, and validation
+    indices: str
+
+    # The classifier to be used in the experiment
+    classifier_factory: ClassifierFactory
+
+    # Other
+    seed: int = 23514
+    logger: ClassVar = logging.getLogger("Experiment")
+
+    def load_dataset(self):
+        """Load the monitored and unmonitored features and classes labels.
+        """
+        self.logger.info("Loading the dataset from %r...", self.dataset)
+        with h5py.File(self.dataset, mode="r") as h5file:
+            y_true = np.asarray(h5file["labels"]["class"])
+            sizes = np.asarray(h5file["sizes"], np.object)
+            times = np.asarray(h5file["timestamps"], np.object)
+
+            assert len(y_true) == len(sizes) == len(times) != 0
+
+            self.logger.info("Converting the %d samples to features...",
+                             len(y_true))
+            features = self.classifier_factory.extract_features(
+                sizes=sizes, timestamps=times)
+
+            self.logger.info("Generated features with shape %s", features.shape)
+            return features, y_true
+
+    def load_splits(self):
+        """Load the indices to split the dataset."""
+        indices = json.loads(pathlib.Path(self.indices).read_text())
+
+        with_val = self.classifier_factory.requires_validation_set
+
+        # Indices train, val, test are used if the classifier requires a
+        # validation set. The combined indices train-val is used if there is no
+        # need for a validation set
+        train_idx = np.asarray(indices["train" if with_val else "train-val"])
+        val_idx = np.asarray(indices["val"]) if with_val else None
+        test_idx = np.asarray(indices["test"])
+
+        n_val = 0 if val_idx is None else len(val_idx)
+        self.logger.info("Using %d training samples, %d validation samples and "
+                         "%d test samples.", len(train_idx), n_val,
+                         len(test_idx))
+        return train_idx, val_idx, test_idx
+
+    def run(self) -> tuple:
+        """Run the experiment and yield the prediction probablities for
+        each class, the classes, and the true class label.
+        """
+        self.logger.info("Running %s.", self)
+        start = time.perf_counter()
+
+        random_state = RandomState(self.seed)
+        X, y = self.load_dataset()
+        train_idx, val_idx, test_idx = self.load_splits()
+
+        self.logger.info("Fitting the classifier...")
+
+        classifier = self.classifier_factory.create(
+            random_state=random_state)
+
+        if val_idx is None:
+            classifier.fit(X[train_idx], y[train_idx])
+        else:
+            classifier.fit(X[train_idx], y[train_idx],
+                           validation_data=(X[val_idx], y[val_idx]))
+
+        self.logger.info("Performing predictions...")
+        probabilities = classifier.predict_proba(X[test_idx])
+
+        self.logger.info(
+            "Experiment complete in %.2fs.", (time.perf_counter() - start))
+
+        return (probabilities, y[test_idx], classifier.classes_)
+
+
+@contextlib.contextmanager
+def acquire_device():
+    """Acquire exclusive usage of a GPU device for tensorflow.  If no
+    GPUs are available then revert to tensorflow's default behaviour.
+    """
+    gpus = tensorflow.config.experimental.list_physical_devices("GPU")
+    n_gpus = len(gpus)
+
+    # No-op if there are no GPUs
+    if n_gpus == 0:
+        logging.info("No GPUs available, skipping assignment.")
+        yield
+        return
+
+    for device in gpus:
+        tensorflow.config.experimental.set_memory_growth(device, True)
+
+    # Search for a GPU that can be claimed
+    for i in range(n_gpus):
+        with open(f"/var/lock/LOCK..gpu{i}", mode="a") as lockfile:
+            try:
+                fcntl.lockf(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                logging.info("Claimed /GPU:%d for this process.", i)
+            except OSError as err:
+                if err.errno in (errno.EACCES, errno.EAGAIN):
+                    logging.info("/GPU:%d is already claimed.", i)
+                    continue
+                raise
+
+            # Ensure that tensorflow uses the found GPU
+            with tensorflow.device(f"/GPU:{i}"):
+                yield
+                return
+    raise RuntimeError("No available GPUs.")
+
+
+def run_experiment(
+    classifier: str, dataset: str, indices: str, outfile, **kwargs
+):
+    """Run the experiment."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    classifier_args = kwargs["classifier_args"] or dict()
+    if "epochs" in classifier_args:
+        kwargs["epochs"] = int(classifier_args["epochs"])
+    del kwargs["classifier_args"]
+
+    with acquire_device():
+        experiment = Experiment(
+            dataset, indices, get_classifier_factory(classifier, **kwargs))
+
+        (probabilities, y_true, classes) = experiment.run()
+
+        outfile.writerow(["y_true"] + list(classes))
+        outfile.writerows(
+            np.hstack((np.reshape(y_true, (-1, 1)), probabilities)))
+
+
+if __name__ == "__main__":
+    run_experiment(**doceasy.doceasy(__doc__, {
+        "CLASSIFIER": doceasy.Or(
+            "dfnet", "varcnn-time", "varcnn-sizes", "p1fp", "kfp"
+        ),
+        "DATASET": str,
+        "INDICES": str,
+        "OUTFILE": doceasy.CsvFile(mode="w"),
+        "--classifier-args": doceasy.Or(None, doceasy.Mapping()),
+    }))

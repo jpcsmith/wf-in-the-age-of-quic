@@ -1,0 +1,38 @@
+axes.grid: False
+axes.axisbelow: True
+axes.facecolor: white
+axes.edgecolor: .15
+axes.labelcolor: .15
+axes.prop_cycle: cycler('color', [(0.8588235294117648, 0.8588235294117648, 0.8588235294117648), (0.7137254901960784, 0.7137254901960784, 0.7137254901960784), (0.5725490196078431, 0.5725490196078431, 0.5725490196078431), (0.4274509803921569, 0.4274509803921569, 0.4274509803921569), (0.28627450980392155, 0.28627450980392155, 0.28627450980392155), (0.14117647058823535, 0.14117647058823535, 0.14117647058823535)])
+axes.spines.bottom: True
+axes.spines.left: True
+axes.spines.right: True
+axes.spines.top: True
+
+figure.facecolor: white
+
+font.family: sans-serif
+font.sans-serif: Arial, DejaVu Sans, Liberation Sans, Bitstream Vera Sans, sans-serif
+
+grid.color: .8
+grid.linestyle: -
+
+image.cmap: rocket
+
+lines.solid_capstyle: round
+
+patch.edgecolor: w
+patch.facecolor: (0.8588235294117648, 0.8588235294117648, 0.8588235294117648)
+patch.force_edgecolor: True
+
+text.color: .15
+
+xtick.color: .15
+xtick.direction: out
+xtick.bottom: False
+xtick.top: False
+
+ytick.color: .15
+ytick.direction: out
+ytick.left: False
+ytick.right: False

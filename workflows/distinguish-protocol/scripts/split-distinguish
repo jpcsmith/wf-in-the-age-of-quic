@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Usage: split-distinguish [options] DATASET INDICES OUTFILE
+
+Perform distinguishing on the samples identified INDICES and record
+the predictions. Combined later with the classification of the test
+set from other distinguishers.
+
+Options:
+    --n-jobs n
+        Use n many parallel jobs.  Must be a positive integer or -1 to
+        use as many jobs as there are cores [default: -1].
+"""
+import json
+import time
+import pathlib
+import logging
+import dataclasses
+from typing import ClassVar
+
+import h5py
+import doceasy
+import pandas as pd
+import numpy as np
+from numpy.random import RandomState
+from sklearn.ensemble import RandomForestClassifier
+
+
+@dataclasses.dataclass
+class Experiment:
+    """An experiment evaluating the performance of with differing
+    datasets.
+    """
+    # The path to the HDF dataset to load the traces from
+    dataset: str
+
+    # Path to a file with the indices for training, testing, and validation
+    indices: str
+
+    # The number of QUIC features to use
+    n_quic_features: int = 300
+
+    # The number of estimators to use in training, more is always better, but
+    # results in a longer runtime
+    n_estimators: int = 150
+
+    # The number of jobs, -1 means use all
+    n_jobs: int = -1
+
+    # Other
+    seed: int = 22520
+
+    logger: ClassVar = logging.getLogger("Experiment")
+
+    def load_dataset(self):
+        """Load the monitored and unmonitored features and classes labels.
+        """
+        self.logger.info("Loading the dataset from %r...", self.dataset)
+        with h5py.File(self.dataset, mode="r") as h5file:
+            self.logger.info("Loading the labels...")
+            labels = pd.DataFrame.from_records(np.asarray(h5file["labels"]))
+            y = (labels["protocol"] != b"tcp").values.astype(int)
+
+            self.logger.info("Loading the features...")
+            features = np.hstack(
+                (h5file["kfp"], h5file["kfp-ext"][:, :self.n_quic_features]))
+            features = np.nan_to_num(features, copy=False)
+
+            return features, y
+
+    def load_splits(self):
+        """Load the indices to split the dataset."""
+        indices = json.loads(pathlib.Path(self.indices).read_text())
+
+        train_idx = np.asarray(indices["train-val"])
+        test_idx = np.asarray(indices["test"])
+
+        self.logger.info("Using %d training samples and %d test samples.",
+                         len(train_idx), len(test_idx))
+        return train_idx, test_idx
+
+    def run(self) -> tuple:
+        """Run the experiment and yield the prediction probablities for
+        each class, the classes, and the true class label.
+        """
+        self.logger.info("Running %s.", self)
+        start = time.perf_counter()
+
+        random_state = RandomState(self.seed)
+        X, y = self.load_dataset()
+        train_idx, test_idx = self.load_splits()
+
+        self.logger.info("Fitting the classifier...")
+
+        classifier = RandomForestClassifier(
+            self.n_estimators, oob_score=True,
+            random_state=random_state, n_jobs=self.n_jobs)
+        classifier.fit(X[train_idx], y[train_idx])
+
+        self.logger.info("Performing predictions...")
+        probabilities = classifier.predict_proba(X[test_idx])[:, 1]
+
+        self.logger.info(
+            "Experiment complete in %.2fs.", (time.perf_counter() - start))
+
+        return (probabilities, y[test_idx])
+
+
+def run_experiment(dataset: str, indices: str, outfile, **config):
+    """Run the experiment."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    (probabilities, y_true) = Experiment(dataset, indices, **config).run()
+
+    outfile.writerow(["y_true", "predictions"])
+    outfile.writerows(np.hstack(
+        (y_true.reshape((-1, 1)), probabilities.reshape((-1, 1)))
+    ))
+
+
+if __name__ == "__main__":
+    run_experiment(**doceasy.doceasy(__doc__, {
+        "DATASET": str,
+        "INDICES": str,
+        "OUTFILE": doceasy.CsvFile(mode="w"),
+        "--n-jobs": doceasy.Use(int),
+    }))

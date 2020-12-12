@@ -1,0 +1,32 @@
+axes.axisbelow: true
+axes.edgecolor: .8
+axes.facecolor: white
+axes.grid: true
+axes.labelcolor: .15
+axes.spines.bottom: false
+axes.spines.left: false
+axes.spines.right: false
+axes.spines.top: false
+figure.facecolor: white
+grid.color: .8
+grid.linestyle: -
+image.cmap: rocket
+lines.solid_capstyle: round
+patch.edgecolor: w
+patch.force_edgecolor: true
+text.color: .15
+xtick.bottom: false
+xtick.color: .15
+xtick.direction: out
+xtick.top: false
+ytick.color: .15
+ytick.direction: out
+ytick.left: false
+ytick.right: false
+
+lines.marker : o
+lines.linewidth : .8
+lines.markeredgewidth: 0.4
+errorbar.capsize : 2.25
+lines.markersize: 3.5
+axes.prop_cycle: cycler('color', ['666666', '777777'])

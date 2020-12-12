@@ -1,0 +1,20 @@
+boxplot.flierprops.markeredgecolor: .3
+boxplot.boxprops.color:             .3
+boxplot.whiskerprops.color:         .3
+boxplot.capprops.color:             .3
+boxplot.medianprops.color: C0
+
+boxplot.boxprops.linewidth :        0.8
+boxplot.capprops.linewidth :        0.8
+boxplot.flierprops.linewidth      : 0.8
+boxplot.flierprops.markeredgewidth: 0.8
+boxplot.meanprops.linewidth       : 0.8
+boxplot.medianprops.linewidth :     0.8
+boxplot.whiskerprops.linewidth :    0.8
+
+boxplot.flierprops.markersize : 4
+
+axes.spines.left   : True 
+axes.spines.bottom : True
+axes.spines.top    : False
+axes.spines.right  : False

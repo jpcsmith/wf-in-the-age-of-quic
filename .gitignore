@@ -1,0 +1,23 @@
+# Data and environment directories
+env/
+lab/dist
+lab/build
+experiments/fetch-websites/lab.tar.gz
+workflows/fetch-websites/docker/client/requirements.txt
+results/
+
+# Python wheel files
+*.whl
+
+
+# Directories created by tools
+*.egg-info
+*/**/__pycache__
+.eggs
+.ipynb_checkpoints
+.luigid
+.mypy_cache
+.ropeproject
+.snakemake
+*.lock
+.pytype

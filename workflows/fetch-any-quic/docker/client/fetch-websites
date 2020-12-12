@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Usage: fetch-websites [options] [URLFILE] [OUTFILE]
+
+Fetch the specified websites and report the results in JSON format.
+
+URLFILE denotes a CSV file that contains a URL per line.  If not provided
+or '-', the URLs are read from stdin.  The fetch results are written to
+OUTFILE in JSON format.
+
+Options:
+    --versions csl
+        A comma-separated list of versions to download for each URL.
+        Versions can be repeated to be downloaded it multiple times.
+        The pseudo-versin "tcp" will perform the download without QUIC
+        [default: tcp].
+
+    --repetitions count
+        Perform count repetitions for each URL and version [default: 1].
+
+    --version-ctr counter
+        A mapping from versions to repetitions.  Takes precedence over
+        the --versions and --repetitions arguments.  Has the form
+        "v1=v1count,v2=v2count,v3=v3count" to specify the number of
+        repetitions per individual version.
+
+    --snaplen len
+        Truncate captured packets to len bytes.  By default does not
+        truncate.
+
+    --delay n
+        Wait n seconds between each request for the same URL
+        [default: 15.0].
+
+    --max-attempts n
+        Stop trying to collect a URL after n sequential failures
+        [default: 3].
+
+    --attempts-per-protocol
+        If present, --max-attempts failures for a URL only disqualfies
+        the protocol being collected.
+
+    --driver-path path
+        Use Chromedriver binary at path [default: chromedriver].
+
+    --no-html
+        Strip the HTML from the results before writing.
+
+    --iface interface
+        Interface to collect traces on.  Collect on all interfaces if
+        absent.
+
+    --help
+        Display this message and exit.
+"""
+import logging
+import pathlib
+import asyncio
+from typing import Optional
+from collections import Counter
+
+import doceasy
+from doceasy import Or, Use, And
+
+from lab.fetch_websites import (
+    ProtocolSampler, ChromiumSessionFactory, encode_result
+)
+from lab.sniffer import TCPDumpPacketSniffer
+
+_LOGGER = logging.getLogger(pathlib.Path(__file__).name)
+
+
+def _make_counter(version_str: str, repetitions: int) -> Counter:
+    counter: Counter = Counter()
+    # Remove any whitespace in the version string
+    version_str = ''.join(version_str.split())
+    for version in version_str.split(','):
+        counter[version] += repetitions
+    return counter
+
+
+# pylint: disable=too-many-arguments
+async def main(
+    urlfile,
+    outfile,
+    versions: str,
+    repetitions: int,
+    snaplen: Optional[int],
+    delay: float,
+    driver_path: str,
+    max_attempts: int,
+    attempts_per_protocol: bool,
+    version_ctr: Optional[Counter],
+    no_html: bool,
+    iface: Optional[str]
+):
+    """Entrypoint for the script."""
+    logging.basicConfig(
+        format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO)
+    _LOGGER.info("Running script.")
+
+    urls = [url for (url, ) in urlfile]
+    if not urls:
+        _LOGGER.info("No URLs provided to fetch.")
+        return
+
+    sampler = ProtocolSampler(
+        sniffer=TCPDumpPacketSniffer(snaplen=snaplen, iface=iface),
+        session_factory=ChromiumSessionFactory(driver_path=driver_path),
+        delay=delay, max_attempts=max_attempts,
+        attempts_per_protocol=attempts_per_protocol)
+
+    version_ctr = version_ctr or _make_counter(versions, repetitions)
+    async for result in sampler.sample_multiple((urls, version_ctr)):
+        if no_html:
+            result['page_source'] = None
+        outfile.write(encode_result(result))
+        outfile.write('\n')
+        outfile.flush()
+
+    _LOGGER.info("Script complete.")
+
+
+if __name__ == '__main__':
+    asyncio.run(
+        main(**doceasy.doceasy(__doc__, doceasy.Schema({
+            'URLFILE': doceasy.CsvFile(mode='r', default='-'),
+            'OUTFILE': doceasy.File(mode='w', default='-'),
+            '--versions': str,
+            '--driver-path': str,
+            '--delay': Use(float),
+            '--repetitions': Use(int),
+            '--max-attempts': Use(int),
+            '--attempts-per-protocol': bool,
+            '--snaplen': Or(None, Use(int)),
+            '--version-ctr': Or(None, And(doceasy.Mapping(int), Use(Counter))),
+            '--no-html': bool,
+            '--iface': Or(None, str),
+        }, ignore_extra_keys=True)))
+    )

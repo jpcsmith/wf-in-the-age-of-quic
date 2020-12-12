@@ -1,0 +1,13 @@
+configfile: "config/config.yaml"
+
+rule default:
+    """Run all rules until the experiment plots are created."""
+    input:
+        "results/plots/distinguisher-importance.pgf",
+        "results/plots/distinguisher-performance.pgf",
+        "results/plots/split-classify-prcurve.pgf",
+        "results/plots/split-classify.pgf"
+
+
+include: "rules/evaluate-distinguisher.smk"
+include: "rules/split-ensemble.smk"

@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Usage: select-traces [options] MON_FILE UNMON_FILE OUTFILE
+
+Select monitored traces from the HDF MON_INFILE which meet the required
+number of samples per region and QUIC protocol.  Select unmonitored
+traces from the HDF UNMON_FILE which have at least 1 sample
+per region for the TCP protocol.
+
+All the sizes are written out /sizes and timestamps to /timestamps.
+Classes and metadata are written to /labels. The URLs associated with
+the monitored set are encoded from 0 to n_classes, and the unmonitored
+set are encoded with the class -1.  Classes associated with the URL
+of the unmonitored sample can be read from the "groups" column of
+/labels, and are strictly negative.
+"""
+import time
+import pathlib
+import logging
+from typing_extensions import Final
+
+import h5py
+import doceasy
+import numpy as np
+import pandas as pd
+
+from trace_selection import select_traces
+
+#: The seed used in pseudo-random number generation
+RNG_SEED: Final[int] = 16207
+#: The number of monitored classes
+N_CLASSES: Final[int] = 100
+#: The total number of traces for each monitored URL
+N_MONITORED_TRACES_PER_URL: Final[int] = 100
+#: The total number of traces for each unmonitored URL
+N_UNMONITORED_TRACES_PER_URL: Final[int] = 3
+
+_LOGGER = logging.getLogger(pathlib.Path(__file__).name)
+
+
+def _read_from_hdf(h5group):
+    labels = pd.DataFrame.from_records(np.asarray(h5group["labels"]))
+    return labels[labels["protocol"] == b"tcp"]
+
+
+def _write_selected(traces, in_hdf, out_hdf):
+    dtypes = {name: col.astype("S").dtype
+              for name, col in traces[["protocol", "region"]].items()}
+
+    labels = traces[["class", "group", "protocol", "region"]].to_records(
+        index=False, column_dtypes=dtypes)
+
+    if "labels" not in out_hdf.keys():
+        _LOGGER.info("Writing %d labels to a new dataset...", len(traces))
+        out_hdf.create_dataset("labels", data=labels, compression="gzip",
+                               maxshape=(None, ))
+    else:
+        _LOGGER.info("Appending %d labels to the existing dataset...",
+                     len(traces))
+        dataset = out_hdf["labels"]
+        dataset.resize((dataset.shape[0] + len(labels), ))
+        dataset[-len(labels):] = labels
+
+    index = traces.index.values
+    for key in ("sizes", "timestamps"):
+        if key not in out_hdf.keys():
+            _LOGGER.info("Copying %d %s to a new dataset...", len(index), key)
+            out_hdf.create_dataset(f"{key}", data=in_hdf[key][index],
+                                   compression="gzip", maxshape=(None, ))
+        else:
+            _LOGGER.info("Appending %d %s to the existing dataset...",
+                         len(index), key)
+            dataset = out_hdf[key]
+            dataset.resize((dataset.shape[0] + len(index), ))
+            dataset[-len(index):] = in_hdf[key][index]
+
+
+def _encode_urls(urls: pd.Series) -> np.ndarray:
+    return urls.astype("category").cat.codes
+
+
+def main(mon_file: str, unmon_file: str, outfile: str):
+    """Select the traces that meet the required number of monitored and
+    unmonitored traces.
+    """
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    start = time.perf_counter()
+    rand = np.random.RandomState(RNG_SEED)
+
+    with h5py.File(outfile, mode="w") as out_hdf:
+        _LOGGER.info("Openned %r for writing results.", outfile)
+
+        with h5py.File(mon_file, mode="r") as hdf_file:
+            _LOGGER.info("Reading monitored samples...")
+            traces = _read_from_hdf(hdf_file)
+
+            _LOGGER.info("Selecting traces from %d samples...", len(traces))
+            traces = select_traces(
+                traces, n_traces=N_MONITORED_TRACES_PER_URL,
+                n_classes=N_CLASSES, random_state=rand)
+            traces["group"] = 0
+            traces["class"] = _encode_urls(traces["url"])
+
+            _LOGGER.info("Writing %d selected samples...", len(traces))
+            _write_selected(traces, hdf_file, out_hdf)
+
+        with h5py.File(unmon_file, mode="r") as hdf_file:
+            _LOGGER.info("Reading unmonitored samples...")
+            traces = _read_from_hdf(hdf_file)
+
+            _LOGGER.info("Selecting traces from %d samples...", len(traces))
+            traces = select_traces(
+                traces, n_traces=N_UNMONITORED_TRACES_PER_URL, n_classes=-1,
+                random_state=rand)
+            traces["group"] = -1 * (_encode_urls(traces["url"]) + 1)
+            traces["class"] = -1
+
+            _LOGGER.info("Writing %d selected samples...", len(traces))
+            _write_selected(traces, hdf_file, out_hdf)
+
+    _LOGGER.info("Script complete in %.2fs.", (time.perf_counter() - start))
+
+
+if __name__ == "__main__":
+    main(**doceasy.doceasy(__doc__, {
+        "MON_FILE": str,
+        "UNMON_FILE": str,
+        "OUTFILE": str,
+    }))

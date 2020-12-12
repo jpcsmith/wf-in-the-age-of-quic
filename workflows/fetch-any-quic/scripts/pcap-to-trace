@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Usage: pcap-to-trace [options] CLIENT_SUBNET [INFILE] [OUTFILE]
+
+Creates traces from webpage fetch results, that is the PCAP data is
+expected to be in PCAP embedded in json results from the fetch-website
+experiment.
+
+CLIENT_SUBNET is an IP-subnet that dictates the subnet containing the
+client IP address.  It is used to determine the direction of the trace.
+
+Additionally removes invalid results based on the HTTP status as well as
+the fetch status.
+
+Options:
+    --progress-on i
+        Log progress every i lines [default: 50].
+
+    -Y filter, --display-filter filter
+        Filter packets using the wireshark display filter.  Useful to
+        avoid ClientIndeterminable exceptions, in case there is traffic
+        between hosts in the client subnet.
+
+    --with-stats
+        Add descriptive statistics about the number and sizes of UDP and
+        TCP flows.  Irrelevant for tunneled data.
+"""
+import io
+import gzip
+import json
+import logging
+from ipaddress import ip_network
+from typing import IO, Iterable, Iterator, Optional
+from base64 import b64decode
+
+import pandas as pd
+import doceasy
+
+import lab
+from lab.fetch_websites import Result as FetchResult
+from lab.trace import Trace, TraceData, TraceStats, Direction, IPNetworkType
+
+_LOGGER = logging.getLogger("lab.pcap-to-trace")
+_PCAP_HEADER_LEN = 24
+
+
+def _maybe_unzip(filelike: IO[bytes], unzip: bool) -> io.TextIOWrapper:
+    if unzip:
+        return gzip.open(filelike, 'rt')  # type: ignore
+    return io.TextIOWrapper(filelike)
+
+
+def load_results(filelike: IO[bytes], unzip: bool) -> Iterator[FetchResult]:
+    """Returns an iterator over the fetch results in the input stream."""
+    with _maybe_unzip(filelike, unzip) as infile:
+        for result in (json.loads(line) for line in infile):
+            if result['packets'] is None:
+                result['packets'] = b''
+            result['packets'] = b64decode(
+                result['packets'].encode('utf8'))  # type: ignore
+            yield result
+
+
+class ResultFilter:
+    """Filters results and maintains statistics about the numbers filtered."""
+    def __init__(self):
+        self.stats = {
+            'failed': 0,
+            'no-incoming': 0,
+            'no-outgoing': 0,
+            'no-packets': 0,
+            'invalid-pcap': 0,
+            'valid': 0,
+        }
+        self._logger = _LOGGER
+
+    def _filter_success(self, result) -> bool:
+        """Returns true iff the result has a successful status code, maintains
+        statistics.
+        """
+        if result['status'] == 'success':
+            return True
+        self.stats['failed'] += 1
+        self._logger.info("Dropping instance of '%s' due to status '%s'.",
+                          result['url'], result['status'])
+        return False
+
+    def _filter_packets(self, result: FetchResult) -> bool:
+        """Returns true iff the result has non-empty packet bytes."""
+        if result['packets'] and len(result['packets']) > _PCAP_HEADER_LEN:
+            return True
+        self.stats['no-packets'] += 1
+        self._logger.info("Dropping instance of '%s' due to no packets.",
+                          result['url'])
+        return False
+
+    def filter_results(self, results: Iterable[FetchResult]) \
+            -> Iterator[FetchResult]:
+        """Filter fetch results and maintain statistics."""
+        for result in results:
+            if not self._filter_success(result):
+                continue
+            if not self._filter_packets(result):
+                continue
+
+            self.stats['valid'] += 1
+            yield result
+
+    def validate_trace(self, trace: Trace, url: str) -> bool:
+        """Returns true if the trace is valid, false otherwise."""
+        if not any(pkt.direction == Direction.IN for pkt in trace):
+            self.stats['no-incoming'] += 1
+            _LOGGER.info(
+                "Dropping instance of %s due to no incoming packets.", url)
+        elif not any(pkt.direction == Direction.OUT for pkt in trace):
+            self.stats['no-outgoing'] += 1
+            _LOGGER.info(
+                "Dropping instance of %s due to no outgoing packets.", url)
+        else:
+            return True
+        return False
+
+
+# pylint: disable=too-many-arguments
+def pcap_to_trace(
+    infile, outfile, progress_on: int, client_subnet: IPNetworkType,
+    display_filter: Optional[str], with_stats: bool
+) -> None:
+    """Convert pcaps found in infile to traces and write them to
+    outfile.
+    """
+    def _log_progress(count):
+        _LOGGER.info("Progress: %d traces converted to features.", count)
+        _LOGGER.info("Filter stats %s", result_filter.stats)
+
+    n_processed = 0
+    result_filter = ResultFilter()
+    for result in result_filter.filter_results(load_results(infile, False)):
+        try:
+            trace, packets = lab.trace.pcap_to_trace(
+                result['packets'], client_subnet, display_filter=display_filter)
+        except lab.trace.ClientIndeterminable:
+            _LOGGER.fatal("Unable to determine client for %s", result['url'])
+            raise
+        except lab.trace.PcapParsingError as err:
+            _LOGGER.warning("Dropping instance of %s due to the PCAP being "
+                            "invalid: %r", result['url'], err)
+            result_filter.stats['invalid-pcap'] += 1
+            continue
+
+        if not result_filter.validate_trace(trace, result['url']):
+            continue
+
+        trace_data = TraceData(
+            url=result['url'],
+            protocol=result['protocol'],
+            connections=connection_stats(packets) if with_stats else None,
+            trace=trace)
+        outfile.write(trace_data.serialise())
+        outfile.write('\n')
+
+        n_processed += 1
+        if n_processed % progress_on == 0:
+            _log_progress(n_processed)
+    _log_progress(n_processed)
+
+
+def connection_stats(packets: pd.DataFrame) -> TraceStats:
+    """Return the number of UDP and TCP connections and their  sizes."""
+    result = {}
+    for key in ['udp', 'tcp']:
+        result[f'{key}-flows'] = len(packets[f'{key}.stream'].dropna()
+                                     .unique())
+
+        protocol_packets = packets[~packets[f'{key}.stream'].isna()]
+        result[f'{key}-bytes'] = int(protocol_packets['ip.len'].sum())
+    return result
+
+
+if __name__ == '__main__':
+    pcap_to_trace(**doceasy.doceasy(__doc__, {
+        "INFILE": doceasy.File(mode="rb", default="-"),
+        "OUTFILE": doceasy.File(mode="w", default="-"),
+        "CLIENT_SUBNET": doceasy.Use(ip_network),
+        "--progress-on": doceasy.Use(int),
+        "--display-filter": doceasy.Or(None, str),
+        "--with-stats": bool,
+    }))

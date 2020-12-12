@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#? Usage: docker-fetch-websites [--wireguard WG_CONFIG] ARGS
+#?
+#? Wrapper around the fetch-websites script running in a container
+#? built from the fetch-client docker image.
+#?
+#? The results directory is mounted to the same absolute path in the
+#? container, and the working directory is changed to a copy of the
+#? current directory in the container.
+#?
+#? All arguments are passed to the container.  Use the DOCKER_HOST env
+#? variable to change the host that the container runs on.
+#?
+#? Options:
+#?      --wireguard WG_CONFIG   Mount WG_CONFIG in the container and
+#?                              run with wireguard.  Must be specified
+#?                              before all other arguments.
+set -e
+
+DOCKER_RUN_ARGS=()
+# Disable the log driver so that if the output is streamed, it doesnt saturate
+# docker's logs
+DOCKER_RUN_ARGS+=(-i --rm --log-driver none)
+# Needed for the use of wireguard
+DOCKER_RUN_ARGS+=(--privileged --cap-add NET_ADMIN --cap-add SYS_MODULE)
+# Mimic the script location outside of the container and mount the results 
+# directory to allow for easy in/output
+DOCKER_RUN_ARGS+=(--workdir "$PWD" --volume "$PWD/results:$PWD/results")
+# Use public DNS instead of a potentially unroutable private DNS address
+DOCKER_RUN_ARGS+=(--dns "8.8.8.8" --dns "9.9.9.9")
+# Constrain the CPU and memory usage to allow for parallel invocations
+DOCKER_RUN_ARGS+=(--memory "1.5g" --memory-reservation 1g --cpus 2)
+
+if [ "$1" = "--wireguard" ]; then
+    readonly WG_CONFIG=$(realpath "$2")
+    DOCKER_RUN_ARGS+=(-e "WIREGUARD=1")
+    DOCKER_RUN_ARGS+=(--volume "${WG_CONFIG}:/etc/wireguard/wg0.conf")
+    shift 2
+else
+    DOCKER_RUN_ARGS+=(-e "WIREGUARD=0")
+fi
+
+exec docker run "${DOCKER_RUN_ARGS[@]}" fetch-client "$@"

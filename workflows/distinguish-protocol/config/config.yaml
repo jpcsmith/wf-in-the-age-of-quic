@@ -1,0 +1,20 @@
+---
+# Number of URLs to train and evaluate the distinguisher's performance on
+train_sizes: [10, 20, 40, 60, 80, 120, 140, 160, 180, 200, 320, 640, 1280]
+
+features_dataset: "../single-and-mixed-analyses/results/extracted-dataset.hdf"
+
+# Number of repetitions to evaluate the split-distinguish classifier
+n_repetitions: 20
+
+# The number of quic features to use with kfp-mixed
+n_quic_features: 300
+
+gpu_classifiers: ["dfnet", "varcnn-sizes", "varcnn-time", "p1fp"]
+
+
+vary_splits: [
+    {n_splits: 2, reps: 5}, {n_splits: 3, reps: 4}, {n_splits: 4, reps: 3},
+    {n_splits: 5, reps: 2}, {n_splits: 10, reps: 1}
+]
+vary_repetitions: 10

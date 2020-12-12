@@ -1,0 +1,44 @@
+axes.axisbelow: True
+axes.edgecolor: .8
+axes.grid: True
+axes.labelcolor: .15
+axes.labelsize: 9.600000000000001
+axes.linewidth: 1.0
+axes.prop_cycle: cycler('color', [(0.4, 0.7607843137254902, 0.6470588235294118), (0.9882352941176471, 0.5529411764705883, 0.3843137254901961), (0.5529411764705883, 0.6274509803921569, 0.796078431372549), (0.9058823529411765, 0.5411764705882353, 0.7647058823529411), (0.6509803921568628, 0.8470588235294118, 0.32941176470588235), (1.0, 0.8509803921568627, 0.1843137254901961), (0.8980392156862745, 0.7686274509803922, 0.5803921568627451), (0.7019607843137254, 0.7019607843137254, 0.7019607843137254)])
+axes.titlesize: 9.600000000000001
+font.sans-serif: ['Arial', 'DejaVu Sans', 'Liberation Sans', 'Bitstream Vera Sans', 'sans-serif']
+font.size: 9.600000000000001
+grid.color: .8
+image.cmap: rocket
+legend.fontsize: 8.8
+lines.linewidth: 1.2000000000000002
+lines.markersize: 4.800000000000001
+lines.solid_capstyle: round
+patch.edgecolor: w
+patch.facecolor: (0.4, 0.7607843137254902, 0.6470588235294118)
+patch.force_edgecolor: True
+patch.linewidth: 0.8
+text.color: .15
+xtick.bottom: False
+xtick.color: .15
+xtick.labelsize: 8.8
+xtick.major.size: 4.800000000000001
+xtick.major.width: 1.0
+xtick.minor.size: 3.2
+xtick.minor.width: 0.8
+ytick.color: .15
+ytick.labelsize: 8.8
+ytick.left: False
+ytick.major.size: 4.800000000000001
+ytick.major.width: 1.0
+ytick.minor.size: 3.2
+ytick.minor.width: 0.8
+
+pgf.texsystem: pdflatex
+pgf.rcfonts: False
+text.usetex: False
+axes.labelpad: 10
+
+boxplot.showmeans   : False
+boxplot.meanline    : False
+boxplot.meanprops.markeredgecolor : grey

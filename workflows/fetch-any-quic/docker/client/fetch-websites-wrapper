@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#: Usage: fetch-websites-wrapper [options] ...
+#: 
+#: Wrapper for the fetch-website script to handle in-container
+#: configuration. Currently, the following configuration is done:
+#:  - Disable offloading on the ethernet interface
+#:  - Run wireguard if the WIREGUARD=1 env variable is set
+readonly NET_INTERFACE=eth0
+readonly WG_INTERFACE=wg0
+
+FETCH_PID=
+EXIT_CODE=
+
+
+function signal_fetch {
+    # The exit status below is the status of the last command run before the
+    # signal. It is used only if EXIT_CODE is unset, as the signal may
+    # have occurred during the assignments following wait.
+    EXIT_CODE=${EXIT_CODE:-$?}
+
+    local -r signal="$1"
+
+    echo "Handing the signal: ${signal}, FETCH_PID=${FETCH_PID}, and EXIT_CODE=${EXIT_CODE}" >&2
+
+    # Stop the subprocess with the trapped signal
+    if [ ! -z "${FETCH_PID}" ]; then
+        if [ "${signal}" = "EXIT" ]; then
+            echo "EXIT signal and the fetch is still running, how is that possible?" >&2
+        else
+            echo "Sending signal to the child fetch process..." >&2
+            if kill "-${signal}" "${FETCH_PID}"; then
+                FETCH_PID=
+            else
+                echo "Unable to kill the fetch subprocess?" >&2
+            fi
+        fi
+    else
+        echo "Fetch already terminated, nothing to stop." >&2
+    fi
+}
+
+
+function cleanup {
+    if [[ "${WIREGUARD}" = "1" ]]; then 
+        echo "Shutting down wireguard..." >&2
+        wg-quick down "${WG_INTERFACE}"
+    else
+        echo "Wireguard not in use, nothing to cleanup." >&2
+    fi
+
+    exit ${EXIT_CODE}
+}
+
+
+function fetch_websites_wrapper {
+    # Disable offloading on the ethernet interface.
+    if ! ethtool -K "${NET_INTERFACE}" tx off sg off tso off ufo off gso off gro off lro off; then
+        echo "Unable to disable offloading on ${NET_INTERFACE}" >&2
+        exit 1
+    fi
+
+    # Check if the WIREGUARD environment variable is not set
+    if [[ "${WIREGUARD}" = "1" ]]; then 
+        # Start wireguard
+        if ! wg-quick up "${WG_INTERFACE}"; then 
+            echo "Failed to start wireguard on ${WG_INTERFACE}" >&2
+            exit 1
+        fi
+    fi
+
+    # Cleanup on interrupt
+    trap "signal_fetch INT" INT
+    trap "signal_fetch TERM" TERM
+    trap "cleanup EXIT" EXIT
+
+    # Run the main fetch-websites script
+    echo "Starting the fetch" >&2
+    fetch-websites "$@" <&0 &
+    # Store the PID for a potential kill later
+    FETCH_PID=$!
+
+    wait ${FETCH_PID}
+    # Store the exit code for retuning it
+    EXIT_CODE=$?
+    # Clear the PID as we no longer need to kill
+    FETCH_PID=
+}
+
+fetch_websites_wrapper "$@"

@@ -1,0 +1,27 @@
+configfile: "config/config.yaml"
+
+# ----------------------
+# Settings and functions
+# ----------------------
+GPU_CLASSIFIERS = [c for c in config["classifiers"] if c != "kfp"]
+CPU_CLASSIFIERS = [c for c in config["classifiers"] if c not in GPU_CLASSIFIERS]
+
+# Set the GPU resource to one so that multiple runs do not compete for a single GPU.
+# Can be overridden at the command line if more gpus are available
+workflow.global_resources.setdefault("gpus", 1)
+
+
+rule default:
+    """Default workflow rule. Runs everything to create the final plots."""
+    input:
+        "results/plots/score-vs-quic-presence.pgf",
+        "results/plots/quic-presence-prcurve.pgf",
+        "results/plots/confusion-matrix.tex",
+        "results/plots/vary-deployment.pgf"
+
+
+# ------------------
+# Imports
+# ------------------
+include: "rules/evaluate-quic-settings.smk"
+include: "rules/vary-quic-deployment.smk"

@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Usage: remove-small-packets MIN_PACKET_SIZE INFILE OUTFILE
+
+Remove packets with sizes below the specified threshold,
+MIN_PACKET_SIZE.  INFILE and OUTFILE are HDF files with labels, sizes,
+and timestamps as keys.
+"""
+import time
+import logging
+
+import h5py
+import numpy as np
+import doceasy
+
+_LOGGER = logging.getLogger("remove-small-packets")
+
+
+def main(infile: str, outfile: str, min_packet_size: int):
+    """Script entrypoint."""
+    logging.basicConfig(
+        format='[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
+        level=logging.INFO)
+
+    start = time.perf_counter()
+
+    with h5py.File(infile, mode="r") as h5in:
+        _LOGGER.info("Loading the dataset from %r.", infile)
+        labels, sizes, timestamps = remove_small_packets(
+            np.array(h5in["labels"]), np.array(h5in["sizes"]),
+            np.array(h5in["timestamps"]), min_packet_size=min_packet_size)
+
+        _LOGGER.info("Writing results to %r.", outfile)
+        with h5py.File(outfile, mode="w") as h5out:
+            _LOGGER.info("Writing the labels...")
+            h5out.create_dataset(
+                "labels", shape=labels.shape, dtype=h5in["labels"].dtype,
+                compression="gzip", data=labels)
+
+            _LOGGER.info("Writing the sizes...")
+            h5out.create_dataset(
+                "sizes", shape=sizes.shape, dtype=h5in["sizes"].dtype,
+                compression="gzip", data=sizes)
+
+            _LOGGER.info("Writing the timestamps...")
+            h5out.create_dataset(
+                "timestamps", shape=sizes.shape, dtype=h5in["timestamps"].dtype,
+                compression="gzip", data=timestamps)
+    _LOGGER.info("Script complete in %.2fs.", (time.perf_counter() - start))
+
+
+def remove_small_packets(
+    labels: np.ndarray, sizes: np.ndarray, timestamps: np.ndarray,
+    min_packet_size: int
+):
+    """Remove packets below the specified threshold as well as any
+    samples made invalid by the operation.
+    """
+    _LOGGER.info("Determining packets below %d bytes for %d samples...",
+                 min_packet_size, len(sizes))
+    # Needs to be absolute since we have negaitve and positive sizes
+    row_masks = [np.greater_equal(np.abs(row), min_packet_size)
+                 for row in sizes]
+
+    sizes = np.asarray(
+        [row[mask] for row, mask in zip(sizes, row_masks)],
+        dtype="object")
+
+    # Ensure that the timestamps all still relative to the first
+    # timestamp
+    timestamps = np.asarray(
+        [row[mask] - row[mask][0] if np.any(mask) else np.array([])
+         for row, mask in zip(timestamps, row_masks)],
+        dtype="object")
+
+    # Remove any samples made invalid by thresholding
+    valid_idx = _filter_invalid_samples(sizes)
+
+    return labels[valid_idx], sizes[valid_idx], timestamps[valid_idx]
+
+
+def _filter_invalid_samples(sizes):
+    """The thresholding process may result in traces with no
+    packets, or traces with packets with no incoming or outgoing
+    packets.
+    """
+    # Identify empty rows
+    no_packets = np.array([len(size_row) == 0 for size_row in sizes])
+    _LOGGER.info("Removed %d samples with no packets being larger than "
+                 "the treshold.", np.sum(no_packets))
+
+    # Identify rows with a missing direction. We use ~ here because `any` is
+    # faster than `all`.
+    missing_direction = ~np.array(
+        [np.any(size_row > 0) & np.any(size_row < 0) for size_row in sizes])
+    _LOGGER.info("Removed %d samples with a missing direction.",
+                 np.sum(missing_direction))
+
+    valid_mask = ~(no_packets | missing_direction)
+    return np.nonzero(valid_mask)[0]
+
+
+if __name__ == "__main__":
+    main(**doceasy.doceasy(__doc__, {
+        "INFILE": str,
+        "OUTFILE": str,
+        "MIN_PACKET_SIZE": doceasy.Use(int)
+    }))

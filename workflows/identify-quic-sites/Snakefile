@@ -1,0 +1,9 @@
+configfile: "config/config.yaml"
+
+rule default:
+    """Run all the necessary rules to create the file with the selected
+    URLs."""
+    input: "results/profile-domains/urls-with-version.csv"
+
+include: "rules/all-domains.smk"
+include: "rules/profile-domains.smk"

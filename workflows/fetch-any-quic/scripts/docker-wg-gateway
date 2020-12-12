@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#? Usage: docker-wg-gateway start WG_CONFIG
+#?
+#? Wrapper around wg-gateway docker image. Starts the container in
+#? detached mode prints the container's id.
+#?
+#? WG_CONFIG is the absolute path to the wireguard configuration that
+#? is mounted in the container.
+#?
+#? Use the DOCKER_HOST env variable to change the host that the
+#? container runs on.
+set -e
+
+readonly COMMAND="${1}"
+
+if [ "${COMMAND}" = "start" ]; then
+    readonly WG_CONFIG="$2"
+    if [ -z "${WG_CONFIG}" ]; then
+        echo "A config file is required for mounting" >&2
+        exit 1
+    fi
+    exec docker run --cap-add NET_ADMIN --cap-add SYS_MODULE --publish 51888:51888/udp \
+        --volume "${WG_CONFIG}:/etc/wireguard/wg0.conf" --detach \
+        --log-driver journald --restart unless-stopped wg-gateway
+else
+    echo "Unknown command: '${COMMAND}'" >&2
+    exit 1
+fi
