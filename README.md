@@ -51,8 +51,12 @@ These jobs were run in parallel to reduce runtime, with each train-test split re
 #### 1. Clone the repository and change to the directory.
 
 ```bash
+# Clone the repository
 git clone https://github.com/jpcsmith/wf-in-the-age-of-quic.git
+# Change to the code directory
 cd quic-traffic-analysis/
+# Download the git LFS files
+git lfs pull
 ```
 
 #### 2. Create and activate a virtual environment
