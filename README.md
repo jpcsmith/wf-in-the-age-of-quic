@@ -5,7 +5,6 @@ This repository contains the code for the paper "Website Fingerprinting in the A
 The code is divided into "workflows" with each workflow responsible for one or a few related experiments.
 Each workflow contains the scripts for collecting and processing data, performing machine learning classification, and generating plots for the paper.
 
-
 ## Data Availability Statements
 
 The data used to support this paper are provided in two sets:
@@ -47,6 +46,10 @@ These jobs were run in parallel to reduce runtime, with each train-test split re
 **Note:** The current `requirements.txt` specifies tensorflow-cpu. If you have access to a GPU then install tensorflow-gpu instead.
 
 ## Getting Started
+
+A virutal box image with code and data already downloaded is currently available at this [**link**](https://polybox.ethz.ch/index.php/s/YGYX4qNu9hxUpvn) for quick access.
+
+The instructions below describe how setup and run the workflow from scratch.
 
 #### 1. Clone the repository and change to the directory.
 
