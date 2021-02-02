@@ -54,7 +54,7 @@ These jobs were run in parallel to reduce runtime, with each train-test split re
 # Clone the repository
 git clone https://github.com/jpcsmith/wf-in-the-age-of-quic.git
 # Change to the code directory
-cd quic-traffic-analysis/
+cd wf-in-the-age-of-quic/
 # Download the git LFS files
 git lfs pull
 ```
