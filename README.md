@@ -11,7 +11,7 @@ The data used to support this paper are provided in two sets:
 
 - [**quic-wf-core.tgz (831 MB)**](https://polybox.ethz.ch/index.php/s/u10mAN6NCcDP39U):
   - The domains used for scanning and the scan results in CSV format with headers.
-  - The open-world-dataset in HDF5 format, with class labels, arrays of sizes and timestamps, and packets below 175 bytes removed.
+  - The open-world-dataset in HDF5 format with class, protocol, and VPN location labels; arrays of sizes and timestamps; and packets below 175 bytes removed.  
 - **quic-wf-raw.tar (28 GB)**:
   - The raw fetch QUIC and TCP traces and their associated metadata.
   - Each file is a JSON stream of objects with the following, possible null-valued, keys:
