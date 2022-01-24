@@ -21,6 +21,7 @@ The data used to support this paper are provided in two sets:
     - *packets*: base64 encoded PCAP for the request
     - *http_trace*: Chromium DevTools performance log ([reference](https://chromedevtools.github.io/devtools-protocol/tot/Network/))
   - Due to the size, this is only available upon request.
+  - **New 2022-01-24**: Also available in [**pcapml**](https://nprint.github.io/pcapml.html) format upon request!
 
 > **Note:** A QUIC trace in the dataset refers to a trace of a Wireguard tunnel containing a mixture of QUIC and TCP packets associated with requesting the web-page over a QUIC connection. This means that at the least the initial connection to the web-server is over QUIC.
 
