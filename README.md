@@ -9,10 +9,10 @@ Each workflow contains the scripts for collecting and processing data, performin
 
 The data used to support this paper are provided in two sets:
 
-- [**quic-wf-core.tgz (831 MB)**](https://polybox.ethz.ch/index.php/s/u10mAN6NCcDP39U):
+- [**quic-wf-core.tgz (831 MB)**](https://doi.org/10.3929/ethz-b-000456101):
   - The domains used for scanning and the scan results in CSV format with headers.
   - The open-world-dataset in HDF5 format with class, protocol, and VPN location labels; arrays of sizes and timestamps; and packets below 175 bytes removed.  
-- **quic-wf-raw.tar (28 GB)**:
+- [**quic-wf-raw.tar (28 GB)**](https://doi.org/10.3929/ethz-b-000456101):
   - The raw fetch QUIC and TCP traces and their associated metadata.
   - Each file is a JSON stream of objects with the following, possible null-valued, keys:
     - *url, final_url*: requested and final redirected URLs
@@ -20,8 +20,6 @@ The data used to support this paper are provided in two sets:
     - *protocol*: protocol used to request the main page, "quic" or "tcp"
     - *packets*: base64 encoded PCAP for the request
     - *http_trace*: Chromium DevTools performance log ([reference](https://chromedevtools.github.io/devtools-protocol/tot/Network/))
-  - Due to the size, this is only available upon request.
-  - **New 2022-01-24**: Also available in [**pcapml**](https://nprint.github.io/pcapml.html) format upon request!
 
 > **Note:** A QUIC trace in the dataset refers to a trace of a Wireguard tunnel containing a mixture of QUIC and TCP packets associated with requesting the web-page over a QUIC connection. This means that at the least the initial connection to the web-server is over QUIC.
 
